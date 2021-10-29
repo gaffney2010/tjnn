@@ -22,8 +22,8 @@ class Node(object):
         self.path_product: float = 1.0
         self.name = name
 
-    def __hash__(self) -> str:
-        return self.name
+    def __hash__(self) -> int:
+        return hash(self.name)
 
     def activate(self) -> None:
         # Applies some activation layer to the value
@@ -32,7 +32,7 @@ class Node(object):
 
 class InputNode(Node):
     def __init__(self, name: str):
-        super.__init__(name)
+        super().__init__(name)
 
     def set_value(self, value: float) -> None:
         self.value = value
@@ -41,7 +41,7 @@ class InputNode(Node):
 # Always assume it's ReLu
 class BodyNode(Node):
     def __init__(self, name: str):
-        super.__init__(name)
+        super().__init__(name)
 
     def activate(self) -> None:
         if self.value < 0:
@@ -50,29 +50,43 @@ class BodyNode(Node):
 
 class Edge(object):
     def __init__(self, nfrom: Node, nto: Node):
-        self.weight = random.randrange(-1, 1)
-        self.derivative = 0
+        self.weight = random.uniform(-0.01, 0.01)
+        self.gradiant = 0
         self.nfrom = nfrom
         self.nto = nto
 
     def update_gradient(self, gamma: float) -> None:
-        self.weight += self.derivative * gamma
+        self.weight += self.gradiant * gamma
 
 
 # Always assume it's a logit
 class OutputNode(Node):
     def __init__(self, name: str):
         self.actual: Optional[float] = None
-        super.__init__(name)
+        super().__init__(name)
 
-    def set_value(self, value: float):
+    def set_value(self, value: float) -> None:
         self.actual = value
 
-    def activate(self):
+    def activate(self) -> None:
+        # Some conditionals to avoid overflow
+        if self.value > 5.0:
+            self.value = 1.0
+            return
+        if self.value < -5.0:
+            self.value = 0
+            return
+
         exp = np.exp(self.value)
         self.value = exp / (exp + 1.0)
 
     def derivative_error(self) -> float:
+        # Dumb hack, you know why
+        if 0.99999 < self.value < 1.00001:
+            self.value = 1.00001
+        if -0.00001 < self.value < 0.00001:
+            self.value = 0.00001
+
         if self.actual == 1:
             return 1.0 / self.value
         if self.actual == 0:
@@ -106,7 +120,7 @@ class Graph(object):
         while node_queue:
             this_node = node_queue.pop()
             yield this_node
-            for edge in this_node.outgoing_edges:
+            for edge in this_node.outgoing:
                 node_queue.push(edge.nto)
 
     def _back_walk_from(self, end_node: Node) -> Iterator[Node]:
@@ -116,7 +130,7 @@ class Graph(object):
         while node_queue:
             this_node = node_queue.pop()
             yield this_node
-            for edge in this_node.incoming_edges:
+            for edge in this_node.incoming:
                 node_queue.push(edge.nfrom)
 
     def forward_prop(self) -> None:
@@ -130,7 +144,7 @@ class Graph(object):
             # At this point all incoming values have been added
             node.activate()
 
-            for edge in node.outgoing_edges:
+            for edge in node.outgoing:
                 edge.nto.value += edge.weight * node.value
 
     def back_prop(self) -> None:
@@ -142,8 +156,8 @@ class Graph(object):
                 node.path_product = 1.0
 
             for node in self._back_walk_from(output):
-                for edge in node.outgoing_paths:
-                    node.path_product *= edge.value * edge.nto.path_product
+                for edge in node.outgoing:
+                    node.path_product *= edge.weight * edge.nto.path_product
 
             # Now calculate the gradiant on each edge
             for edge in self.edges:
@@ -182,14 +196,21 @@ def train(
     mini_batch_size: int,
     epochs: int,
 ) -> None:
+    total_mini_batches = 1  # For testing
     for _ in range(epochs):
-        inds = random.shuffle(range(len(all_inputs)))
+        print(f"Epoch {_}")
+        inds = list(range(len(all_inputs)))
+        random.shuffle(inds)
         while len(inds) >= mini_batch_size:
+            total_mini_batches -= 1
+            print("MINI-BATCH")
             mini_batch_inds = inds[:mini_batch_size]
             inds = inds[mini_batch_size:]
             inputs = [all_inputs[i] for i in mini_batch_inds]
             outputs = [all_outputs[i] for i in mini_batch_inds]
             train_mini_batch(graph, inputs, outputs, gamma)
+            if total_mini_batches <= 0:
+                return
 
 
 @attr.s()
@@ -206,7 +227,7 @@ def build_graph(layers: List[Layer]) -> Graph:
     all_nodes: List[List[Node]] = list()
     for i, layer in enumerate(layers):
         nodes: List[Node] = list()
-        for j in range(layer.number_node):
+        for j in range(layer.number_nodes):
             new_node = layer.node_type(f"{i}, {j}")
             nodes.append(new_node)
             if type(new_node) is InputNode:
@@ -227,5 +248,31 @@ def build_graph(layers: List[Layer]) -> Graph:
     return result
 
 
+# TJ: Magic numbers and strings
+inputs, outputs = list(), list()
+with open("data/mnist_train.csv", "r") as f:
+    while line := f.readline():
+        csv = line.split(",")
+
+        output = list()
+        target = csv[0]
+        for i in range(10):
+            output.append(1 if str(i) == target else 0)
+        outputs.append(output)
+
+        input = [float(i) for i in csv[1:]]
+        inputs.append(input)
+
+
+graph = build_graph(
+    [
+        Layer(node_type=InputNode, number_nodes=28 * 28),
+        Layer(node_type=BodyNode, number_nodes=80),
+        Layer(node_type=OutputNode, number_nodes=10),
+    ]
+)
+
+
 print("HELLO")
 
+train(graph, inputs, outputs, 0.05, 100, 1)

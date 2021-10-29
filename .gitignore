@@ -129,3 +129,9 @@ dmypy.json
 .pyre/
 
 .vscode/
+
+# Don't upload data
+data/*.csv
+
+.DS_Store
+nnProfile

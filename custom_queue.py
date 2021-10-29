@@ -18,7 +18,7 @@ class UniqueQueue(object):
 
     def pop(self) -> Elem:
         result = self._queue[0]
-        result = result[1:]
+        self._queue = self._queue[1:]
         return result
 
     def __bool__(self) -> bool:

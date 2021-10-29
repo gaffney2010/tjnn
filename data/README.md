@@ -1,0 +1,1 @@
+Download mnist_train.csv and mnist_test.csv from https://pjreddie.com/projects/mnist-in-csv/
