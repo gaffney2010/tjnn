@@ -4,8 +4,6 @@ from typing import Any, Iterator, List, Optional, Type
 import attr
 import numpy as np
 
-from custom_queue import UniqueQueue
-
 
 Vector = List[float]
 
@@ -20,7 +18,12 @@ class Node(object):
         self.outgoing: List["Edge"] = list()
         self.value: float = 0.0
         self.path_product: float = 1.0
-        self.name = name
+        self.type = "Bare Node"
+        self._name = name
+
+    @property
+    def name(self) -> str:
+        return f"{self.type}: {self._name}"
 
     def __hash__(self) -> int:
         return hash(self.name)
@@ -42,6 +45,7 @@ class InputNode(Node):
 class BodyNode(Node):
     def __init__(self, name: str):
         super().__init__(name)
+        self.type = "Body"
 
     def activate(self) -> None:
         if self.value < 0:
@@ -64,6 +68,7 @@ class OutputNode(Node):
     def __init__(self, name: str):
         self.actual: Optional[float] = None
         super().__init__(name)
+        self.type = "Output"
 
     def set_value(self, value: float) -> None:
         self.actual = value
@@ -96,9 +101,16 @@ class OutputNode(Node):
 
 class Graph(object):
     def __init__(self):
-        self.inputs: List[InputNode] = list()
-        self.outputs: List[OutputNode] = list()
+        self.layers: List[List[Node]] = list()
         self.edges: List[Edge] = list()
+
+    @property
+    def inputs(self) -> List[Node]:
+        return self.layers[0]
+
+    @property
+    def outputs(self) -> List[Node]:
+        return self.layers[-1]
 
     def put_in_out(self, input: Vector, output: Vector) -> None:
         if len(self.inputs) != len(input):
@@ -113,25 +125,15 @@ class Graph(object):
             self.outputs[i].set_value(output[i])
 
     def _forward_walk(self) -> Iterator[Node]:
-        node_queue = UniqueQueue()
-        for i in self.inputs:
-            node_queue.push(i)
-
-        while node_queue:
-            this_node = node_queue.pop()
-            yield this_node
-            for edge in this_node.outgoing:
-                node_queue.push(edge.nto)
+        for layer in self.layers:
+            for node in layer:
+                yield node
 
     def _back_walk_from(self, end_node: Node) -> Iterator[Node]:
-        node_queue = UniqueQueue()
-        node_queue.push(end_node)
-
-        while node_queue:
-            this_node = node_queue.pop()
-            yield this_node
-            for edge in this_node.incoming:
-                node_queue.push(edge.nfrom)
+        yield end_node
+        for layer in self.layers[-2::-1]:
+            for node in layer:
+                yield node
 
     def forward_prop(self) -> None:
         # First zero out all nodes, except the input nodes
@@ -155,15 +157,22 @@ class Graph(object):
             for node in self._back_walk_from(output):
                 node.path_product = 1.0
 
+            c1, c2 = 0, 0
+
             for node in self._back_walk_from(output):
                 for edge in node.outgoing:
+                    c1 += 1
                     node.path_product *= edge.weight * edge.nto.path_product
 
             # Now calculate the gradiant on each edge
             for edge in self.edges:
+                c2 += 1
                 edge.gradiant += (
                     derivate_error * edge.nto.path_product * edge.nfrom.value
                 )
+
+                print(c1)
+                print(c2)
 
     def update_gradient(self, gamma: float) -> None:
         for edge in self.edges:
@@ -221,25 +230,24 @@ class Layer(object):
 
 # Makes a dense graph with specified layers
 def build_graph(layers: List[Layer]) -> Graph:
+    """Makes a dense graph with specified layers
+    
+    First layer must be inputs, and last layer must be outputs.
+    """
     result = Graph()
 
     # Make layers of nodes
-    all_nodes: List[List[Node]] = list()
     for i, layer in enumerate(layers):
         nodes: List[Node] = list()
         for j in range(layer.number_nodes):
             new_node = layer.node_type(f"{i}, {j}")
             nodes.append(new_node)
-            if type(new_node) is InputNode:
-                result.inputs.append(new_node)
-            if type(new_node) is OutputNode:
-                result.outputs.append(new_node)
-        all_nodes.append(nodes)
+        result.layers.append(nodes)
 
     # Add edges
-    for li in range(len(all_nodes) - 1):
-        for nfrom in all_nodes[li]:
-            for nto in all_nodes[li + 1]:
+    for li in range(len(result.layers) - 1):
+        for nfrom in result.layers[li]:
+            for nto in result.layers[li + 1]:
                 new_edge = Edge(nfrom, nto)
                 result.edges.append(new_edge)
                 nfrom.outgoing.append(new_edge)
