@@ -3,6 +3,7 @@ from typing import Any, Iterator, List, Optional, Type
 
 import attr
 import numpy as np
+from sympy import *
 
 
 Vector = List[float]
@@ -18,12 +19,14 @@ class Node(object):
         self.outgoing: List["Edge"] = list()
         self.value: float = 0.0
         self.path_product: float = 1.0
-        self.type = "Bare Node"
+        self.type = "BareNode"
         self._name = name
+        self.sym = symbols(self.name)
+        self.path_product_lambda = None
 
     @property
     def name(self) -> str:
-        return f"{self.type}: {self._name}"
+        return f"{self.type}_{self._name}"
 
     def __hash__(self) -> int:
         return hash(self.name)
@@ -55,7 +58,6 @@ class BodyNode(Node):
 class Edge(object):
     def __init__(self, nfrom: Node, nto: Node):
         self.weight = random.uniform(-0.01, 0.01)
-        self.gradiant = 0
         self.nfrom = nfrom
         self.nto = nto
 
@@ -69,6 +71,7 @@ class OutputNode(Node):
         self.actual: Optional[float] = None
         super().__init__(name)
         self.type = "Output"
+        self.de_sym: Symbol = symbols(f"de_{self.name}")
 
     def set_value(self, value: float) -> None:
         self.actual = value
@@ -84,6 +87,9 @@ class OutputNode(Node):
 
         exp = np.exp(self.value)
         self.value = exp / (exp + 1.0)
+
+    def sym_derivative_error(self) -> Symbol:
+        return self.de_sym
 
     def derivative_error(self) -> float:
         # Dumb hack, you know why
@@ -148,33 +154,39 @@ class Graph(object):
             for edge in node.outgoing:
                 edge.nto.value += edge.weight * node.value
 
-    def back_prop(self) -> None:
+    def sym_back_prop(self) -> None:
         # First clear out all path_product variables
         for node in self._back_walk():
-            node.path_product = 1.0
+            node.path_product = 0.0
 
         # Set the derivate_error for the output nodes
         for node in self.outputs:
-            node.path_product = node.derivative_error()
+            node.path_product = node.sym_derivative_error()
 
         for node in self._back_walk():
             # Does nothing for output nodes
             for edge in node.outgoing:
-                node.path_product *= edge.weight * edge.nto.path_product
+                node.path_product += edge.weight * edge.nto.path_product
 
-        # Now calculate the gradiant on each edge
+        # Convert symbolic equations to Python functions for optimization
+        for node in self._forward_walk():
+            node.path_product_lambda = lambdify(
+                [o.sym_derivative_error() for o in self.outputs], node.path_product
+            )
+
+    def update_gradiants_from_sym(self, gamma: float) -> None:
+        self.forward_prop()
+
+        all_subs = [o.derivative_error() for o in self.outputs]
+
         for edge in self.edges:
-            edge.gradiant += edge.nto.path_product * edge.nfrom.value
-
-    def update_gradient(self, gamma: float) -> None:
-        for edge in self.edges:
-            edge.update_gradient(gamma)
+            grad = edge.nto.path_product_lambda(*all_subs) * edge.nfrom.value
+            edge.weight += gamma * grad
 
 
-def train_one(graph, input: Vector, output: Vector) -> None:
+def train_one(graph, input: Vector, output: Vector, gamma: float) -> None:
     graph.put_in_out(input, output)
-    graph.forward_prop()
-    graph.back_prop()
+    graph.update_gradiants_from_sym(gamma)
 
 
 def train_mini_batch(
@@ -183,10 +195,13 @@ def train_mini_batch(
     if len(inputs) != len(outputs):
         raise NnException
 
-    for i, o in zip(inputs, outputs):
-        train_one(graph, i, o)
+    graph.sym_back_prop()
 
-    graph.update_gradient(gamma)
+    ct = 0
+    for i, o in zip(inputs, outputs):
+        ct += 1
+        print(f"Data point {ct} of {len(inputs)}")
+        train_one(graph, i, o, gamma)
 
 
 def train(
@@ -232,7 +247,7 @@ def build_graph(layers: List[Layer]) -> Graph:
     for i, layer in enumerate(layers):
         nodes: List[Node] = list()
         for j in range(layer.number_nodes):
-            new_node = layer.node_type(f"{i}, {j}")
+            new_node = layer.node_type(f"{i}_{j}")
             nodes.append(new_node)
         result.layers.append(nodes)
 
@@ -267,7 +282,7 @@ with open("data/mnist_train.csv", "r") as f:
 graph = build_graph(
     [
         Layer(node_type=InputNode, number_nodes=28 * 28),
-        Layer(node_type=BodyNode, number_nodes=80),
+        Layer(node_type=BodyNode, number_nodes=20),
         Layer(node_type=OutputNode, number_nodes=10),
     ]
 )
