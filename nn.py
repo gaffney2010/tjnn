@@ -129,9 +129,8 @@ class Graph(object):
             for node in layer:
                 yield node
 
-    def _back_walk_from(self, end_node: Node) -> Iterator[Node]:
-        yield end_node
-        for layer in self.layers[-2::-1]:
+    def _back_walk(self) -> Iterator[Node]:
+        for layer in self.layers[::-1]:
             for node in layer:
                 yield node
 
@@ -150,29 +149,22 @@ class Graph(object):
                 edge.nto.value += edge.weight * node.value
 
     def back_prop(self) -> None:
-        for output in self.outputs:
-            derivate_error = output.derivative_error()
+        # First clear out all path_product variables
+        for node in self._back_walk():
+            node.path_product = 1.0
 
-            # First clear out all path_product variables
-            for node in self._back_walk_from(output):
-                node.path_product = 1.0
+        # Set the derivate_error for the output nodes
+        for node in self.outputs:
+            node.path_product = node.derivative_error()
 
-            c1, c2 = 0, 0
+        for node in self._back_walk():
+            # Does nothing for output nodes
+            for edge in node.outgoing:
+                node.path_product *= edge.weight * edge.nto.path_product
 
-            for node in self._back_walk_from(output):
-                for edge in node.outgoing:
-                    c1 += 1
-                    node.path_product *= edge.weight * edge.nto.path_product
-
-            # Now calculate the gradiant on each edge
-            for edge in self.edges:
-                c2 += 1
-                edge.gradiant += (
-                    derivate_error * edge.nto.path_product * edge.nfrom.value
-                )
-
-                print(c1)
-                print(c2)
+        # Now calculate the gradiant on each edge
+        for edge in self.edges:
+            edge.gradiant += edge.nto.path_product * edge.nfrom.value
 
     def update_gradient(self, gamma: float) -> None:
         for edge in self.edges:
