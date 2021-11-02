@@ -6,6 +6,14 @@ import numpy as np
 
 
 Vector = List[float]
+Label = int
+
+
+def equal(*elems):
+    """Assert all the elements are equal, and return that element."""
+    elist = list(elems)
+    assert all(x == elist[0] for x in elist)
+    return elist[0]
 
 
 class NnException(Exception):
@@ -112,17 +120,23 @@ class Graph(object):
     def outputs(self) -> List[Node]:
         return self.layers[-1]
 
-    def put_in_out(self, input: Vector, output: Vector) -> None:
-        if len(self.inputs) != len(input):
-            raise NnException
-        if len(self.outputs) != len(output):
-            raise NnException
+    def _put_in(self, input: Vector) -> None:
+        input_sz = equal(len(input), len(self.inputs))
 
         # Just do the translation node-by-node
-        for i in range(len(self.inputs)):
+        for i in range(input_sz):
             self.inputs[i].set_value(input[i])
-        for i in range(len(self.outputs)):
+
+    def _put_out(self, output: Vector) -> None:
+        output_sz = equal(len(output), len(self.outputs))
+
+        # Just do the translation node-by-node
+        for i in range(output_sz):
             self.outputs[i].set_value(output[i])
+
+    def put_in_out(self, input: Vector, output: Vector) -> None:
+        self._put_in(input)
+        self._put_out(output)
 
     def _forward_walk(self) -> Iterator[Node]:
         for layer in self.layers:
@@ -147,6 +161,19 @@ class Graph(object):
 
             for edge in node.outgoing:
                 edge.nto.value += edge.weight * node.value
+
+    def infer(self, input: Vector) -> Label:
+        self._put_in(input)
+        self.forward_prop()
+
+        # Now see what label gets predicted
+        best_guess: Optional[Label] = None
+        best_guess_score: float = 0.0
+        for i, node in enumerate(self.outputs):
+            if node.value > best_guess_score:
+                best_guess = i
+                best_guess_score = node.value
+        return best_guess
 
     def back_prop(self) -> None:
         # First clear out all path_product variables
@@ -189,29 +216,50 @@ def train_mini_batch(
     graph.update_gradient(gamma)
 
 
+def score(graph: Graph, all_inputs: List[Vector], all_outputs: List[Vector]) -> float:
+    data_sz = equal(len(all_inputs), len(all_outputs))
+
+    n_correct, n_all = 0, 0
+    for i in range(data_sz):
+        n_all += 1
+        n_correct += graph.infer(all_inputs[i]) == all_outputs[i]
+
+    return n_correct / n_all
+
+
 def train(
     graph: Graph,
-    all_inputs: List[Vector],
-    all_outputs: List[Vector],
+    train_inputs: List[Vector],
+    train_outputs: List[Vector],
+    test_inputs: List[Vector],
+    test_outputs: List[Vector],
     gamma: float,
     mini_batch_size: int,
     epochs: int,
+    score_every_n_batches=15,
 ) -> None:
-    total_mini_batches = 1  # For testing
+    data_sz = equal(len(train_inputs), len(train_outputs))
+
+    batch_ct = 0
     for _ in range(epochs):
         print(f"Epoch {_}")
-        inds = list(range(len(all_inputs)))
+        inds = list(range(data_sz))
         random.shuffle(inds)
         while len(inds) >= mini_batch_size:
-            total_mini_batches -= 1
             print("MINI-BATCH")
             mini_batch_inds = inds[:mini_batch_size]
             inds = inds[mini_batch_size:]
-            inputs = [all_inputs[i] for i in mini_batch_inds]
-            outputs = [all_outputs[i] for i in mini_batch_inds]
+            inputs = [train_inputs[i] for i in mini_batch_inds]
+            outputs = [train_outputs[i] for i in mini_batch_inds]
             train_mini_batch(graph, inputs, outputs, gamma)
-            if total_mini_batches <= 0:
-                return
+
+            # Decide whether to print update
+            batch_ct += 1
+            if batch_ct % score_every_n_batches == 0:
+                print(f"Accuracy after {batch_ct} batches")
+                print(f"Train set: {score(graph, train_inputs, train_outputs)}")
+                print(f"Test set: {score(graph, test_inputs, test_outputs)}")
+                print()
 
 
 @attr.s()
@@ -249,19 +297,25 @@ def build_graph(layers: List[Layer]) -> Graph:
 
 
 # TJ: Magic numbers and strings
-inputs, outputs = list(), list()
-with open("data/mnist_train.csv", "r") as f:
-    while line := f.readline():
-        csv = line.split(",")
+def make_dataset(fn):
+    inputs, outputs = list(), list()
+    with open(fn, "r") as f:
+        while line := f.readline():
+            csv = line.split(",")
 
-        output = list()
-        target = csv[0]
-        for i in range(10):
-            output.append(1 if str(i) == target else 0)
-        outputs.append(output)
+            output = list()
+            target = csv[0]
+            for i in range(10):
+                output.append(1 if str(i) == target else 0)
+            outputs.append(output)
 
-        input = [float(i) for i in csv[1:]]
-        inputs.append(input)
+            input = [float(i) for i in csv[1:]]
+            inputs.append(input)
+    return inputs, outputs
+
+
+train_inputs, train_outputs = make_dataset("data/mnist_train.csv")
+test_inputs, test_outputs = make_dataset("data/mnist_test.csv")
 
 
 graph = build_graph(
@@ -275,4 +329,4 @@ graph = build_graph(
 
 print("HELLO")
 
-train(graph, inputs, outputs, 0.05, 100, 1)
+train(graph, train_inputs, train_outputs, test_inputs, test_outputs, 0.05, 100, 4)
