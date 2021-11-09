@@ -1,5 +1,7 @@
 import random
 from typing import Any, Iterator, List, Optional, Type
+import warnings
+warnings.filterwarnings("error")
 
 import attr
 import numpy as np
@@ -103,7 +105,7 @@ class OutputNode(Node):
         if self.actual == 1:
             return 1.0 / self.value
         if self.actual == 0:
-            return 1.0 / (1.0 - self.value)
+            return -1.0 / (1.0 - self.value)
         raise NnException
 
 
@@ -161,6 +163,10 @@ class Graph(object):
 
             for edge in node.outgoing:
                 edge.nto.value += edge.weight * node.value
+                if edge.nto.value >= 1e10:
+                    print(edge.weight)
+                    print(node.value)
+                    assert(False)
 
     def infer(self, input: Vector) -> Label:
         self._put_in(input)
@@ -187,11 +193,32 @@ class Graph(object):
         for node in self._back_walk():
             # Does nothing for output nodes
             for edge in node.outgoing:
-                node.path_product *= edge.weight * edge.nto.path_product
+                try:
+                    node.path_product *= edge.weight * edge.nto.path_product
+                    if node.path_product >= 1e10:
+                        print(edge.weight)
+                        print(edge.nto.path_product)
+                        assert(False)
+                except:
+                    print(node.name)
+                    print(edge.nto.name)
+                    print(edge.weight)
+                    print(edge.nto.path_product)
+                    assert(False)
 
         # Now calculate the gradiant on each edge
         for edge in self.edges:
-            edge.gradiant += edge.nto.path_product * edge.nfrom.value
+            try:
+                edge.gradiant += edge.nto.path_product * edge.nfrom.value
+            except:
+                # for edge in self.edges:
+                #     print(edge.nfrom.name)
+                #     print(edge.nto.name)
+                #     print(edge.value)
+                print(edge.nfrom.name)
+                print(edge.nto.path_product)
+                print(edge.nfrom.value)
+                assert(False)
 
     def update_gradient(self, gamma: float) -> None:
         for edge in self.edges:
@@ -221,10 +248,24 @@ def score(graph: Graph, all_inputs: List[Vector], all_outputs: List[Vector]) -> 
 
     n_correct, n_all = 0, 0
     for i in range(data_sz):
+        if i % 20 != 0:
+            continue
         n_all += 1
-        n_correct += graph.infer(all_inputs[i]) == all_outputs[i]
+        n_correct += all_outputs[i][graph.infer(all_inputs[i])] == 1
 
     return n_correct / n_all
+
+
+def print_score(
+    graph: Graph,
+    train_inputs: List[Vector],
+    train_outputs: List[Vector],
+    test_inputs: List[Vector],
+    test_outputs: List[Vector],
+) -> None:
+    print(f"Train set: {score(graph, train_inputs, train_outputs)}")
+    print(f"Test set: {score(graph, test_inputs, test_outputs)}")
+    print()
 
 
 def train(
@@ -246,7 +287,7 @@ def train(
         inds = list(range(data_sz))
         random.shuffle(inds)
         while len(inds) >= mini_batch_size:
-            print("MINI-BATCH")
+            # print("MINI-BATCH")
             mini_batch_inds = inds[:mini_batch_size]
             inds = inds[mini_batch_size:]
             inputs = [train_inputs[i] for i in mini_batch_inds]
@@ -257,9 +298,9 @@ def train(
             batch_ct += 1
             if batch_ct % score_every_n_batches == 0:
                 print(f"Accuracy after {batch_ct} batches")
-                print(f"Train set: {score(graph, train_inputs, train_outputs)}")
-                print(f"Test set: {score(graph, test_inputs, test_outputs)}")
-                print()
+                print_score(
+                    graph, train_inputs, train_outputs, test_inputs, test_outputs
+                )
 
 
 @attr.s()
@@ -329,4 +370,5 @@ graph = build_graph(
 
 print("HELLO")
 
-train(graph, train_inputs, train_outputs, test_inputs, test_outputs, 0.05, 100, 4)
+# print_score(graph, train_inputs, train_outputs, test_inputs, test_outputs)
+train(graph, train_inputs, train_outputs, test_inputs, test_outputs, 0.00002, 100, 4)
