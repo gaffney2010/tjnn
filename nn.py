@@ -2,6 +2,7 @@ import random
 import traceback
 from typing import Any, Iterator, List, Optional, Type
 import warnings
+
 warnings.filterwarnings("error")
 
 import attr
@@ -36,18 +37,18 @@ class SafeFloat(object):
         self.max = 1e5
         self._check_safe()
 
-    def __add__(self, other: 'SafeFloat') -> 'SafeFloat':
+    def __add__(self, other: "SafeFloat") -> "SafeFloat":
         return SafeFloat(self.value + other.value)
 
-    def __iadd__(self, other: 'SafeFloat') -> None:
+    def __iadd__(self, other: "SafeFloat") -> None:
         self.value += other.value
         self._check_safe()
         return self
 
-    def __mul__(self, other: 'SafeFloat') -> 'SafeFloat':
+    def __mul__(self, other: "SafeFloat") -> "SafeFloat":
         return SafeFloat(self.value * other.value)
 
-    def __imul__(self, other: 'SafeFloat') -> None:
+    def __imul__(self, other: "SafeFloat") -> None:
         self.value *= other.value
         self._check_safe()
         return self
