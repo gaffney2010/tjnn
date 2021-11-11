@@ -224,7 +224,12 @@ class Graph(object):
         for node in self.outputs:
             node.path_product = node.derivative_error()
 
+        input_set = set(self.inputs)
         for node in self._back_walk():
+            # Can skip calculation for input nodes, will save work.
+            if node in input_set:
+                continue
+
             # Does nothing for output nodes
             for edge in node.outgoing:
                 node.path_product *= edge.weight * edge.nto.path_product
