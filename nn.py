@@ -1,4 +1,5 @@
 import random
+import traceback
 from typing import Any, Iterator, List, Optional, Type
 import warnings
 warnings.filterwarnings("error")
@@ -11,6 +12,10 @@ Vector = List[float]
 Label = int
 
 
+class NnException(Exception):
+    pass
+
+
 def equal(*elems):
     """Assert all the elements are equal, and return that element."""
     elist = list(elems)
@@ -18,16 +23,48 @@ def equal(*elems):
     return elist[0]
 
 
-class NnException(Exception):
-    pass
+class SafeFloat(object):
+    def _check_safe(self) -> None:
+        if abs(self.value) > self.max:
+            print("ERROR: LARGE VALUE ENCOUNTERED")
+            print(self.value)
+            print(traceback.format_exc())
+            raise NnException
+
+    def __init__(self, value: float = 0.0):
+        self.value = value
+        self.max = 1e5
+        self._check_safe()
+
+    def __add__(self, other: 'SafeFloat') -> 'SafeFloat':
+        return SafeFloat(self.value + other.value)
+
+    def __iadd__(self, other: 'SafeFloat') -> None:
+        self.value += other.value
+        self._check_safe()
+        return self
+
+    def __mul__(self, other: 'SafeFloat') -> 'SafeFloat':
+        return SafeFloat(self.value * other.value)
+
+    def __imul__(self, other: 'SafeFloat') -> None:
+        self.value *= other.value
+        self._check_safe()
+        return self
+
+    def __str__(self) -> str:
+        return f"SafeFloat({self.value})"
+
+    def __repr__(self) -> str:
+        return self.__str__()
 
 
 class Node(object):
     def __init__(self, name: str):
         self.incoming: List["Edge"] = list()
         self.outgoing: List["Edge"] = list()
-        self.value: float = 0.0
-        self.path_product: float = 1.0
+        self.value = SafeFloat(0.0)
+        self.path_product = SafeFloat(1.0)
         self.type = "Bare Node"
         self._name = name
 
@@ -46,9 +83,10 @@ class Node(object):
 class InputNode(Node):
     def __init__(self, name: str):
         super().__init__(name)
+        self.type = "Input"
 
     def set_value(self, value: float) -> None:
-        self.value = value
+        self.value = SafeFloat(value)
 
 
 # Always assume it's ReLu
@@ -58,54 +96,54 @@ class BodyNode(Node):
         self.type = "Body"
 
     def activate(self) -> None:
-        if self.value < 0:
-            self.value = 0
+        if self.value.value < 0.0:
+            self.value = SafeFloat(0.0)
 
 
 class Edge(object):
     def __init__(self, nfrom: Node, nto: Node):
-        self.weight = random.uniform(-0.01, 0.01)
-        self.gradiant = 0
+        self.weight = SafeFloat(random.uniform(-0.01, 0.01))
+        self.gradiant = SafeFloat(0)
         self.nfrom = nfrom
         self.nto = nto
 
     def update_gradient(self, gamma: float) -> None:
-        self.weight += self.gradiant * gamma
+        self.weight += SafeFloat(self.gradiant.value * gamma)
 
 
 # Always assume it's a logit
 class OutputNode(Node):
     def __init__(self, name: str):
-        self.actual: Optional[float] = None
+        self.actual: Optional[int] = None
         super().__init__(name)
         self.type = "Output"
 
-    def set_value(self, value: float) -> None:
+    def set_value(self, value: int) -> None:
         self.actual = value
 
     def activate(self) -> None:
         # Some conditionals to avoid overflow
-        if self.value > 5.0:
-            self.value = 1.0
+        if self.value.value > 5.0:
+            self.value.value = 1.0
             return
-        if self.value < -5.0:
-            self.value = 0
+        if self.value.value < -5.0:
+            self.value.value = 0
             return
 
-        exp = np.exp(self.value)
-        self.value = exp / (exp + 1.0)
+        exp = np.exp(self.value.value)
+        self.value = SafeFloat(exp / (exp + 1.0))
 
-    def derivative_error(self) -> float:
+    def derivative_error(self) -> SafeFloat:
         # Dumb hack, you know why
-        if 0.99999 < self.value < 1.00001:
-            self.value = 1.00001
-        if -0.00001 < self.value < 0.00001:
-            self.value = 0.00001
+        if 0.99999 < self.value.value < 1.00001:
+            self.value = SafeFloat(1.00001)
+        if -0.00001 < self.value.value < 0.00001:
+            self.value = SafeFloat(0.00001)
 
         if self.actual == 1:
-            return 1.0 / self.value
+            return SafeFloat(1.0 / self.value.value)
         if self.actual == 0:
-            return -1.0 / (1.0 - self.value)
+            return SafeFloat(-1.0 / (1.0 - self.value.value))
         raise NnException
 
 
@@ -155,7 +193,7 @@ class Graph(object):
         input_set = set(self.inputs)
         for node in self._forward_walk():
             if node not in input_set:
-                node.value = 0.0
+                node.value = SafeFloat(0.0)
 
         for node in self._forward_walk():
             # At this point all incoming values have been added
@@ -163,10 +201,6 @@ class Graph(object):
 
             for edge in node.outgoing:
                 edge.nto.value += edge.weight * node.value
-                if edge.nto.value >= 1e10:
-                    print(edge.weight)
-                    print(node.value)
-                    assert(False)
 
     def infer(self, input: Vector) -> Label:
         self._put_in(input)
@@ -184,7 +218,7 @@ class Graph(object):
     def back_prop(self) -> None:
         # First clear out all path_product variables
         for node in self._back_walk():
-            node.path_product = 1.0
+            node.path_product = SafeFloat(1.0)
 
         # Set the derivate_error for the output nodes
         for node in self.outputs:
@@ -193,32 +227,11 @@ class Graph(object):
         for node in self._back_walk():
             # Does nothing for output nodes
             for edge in node.outgoing:
-                try:
-                    node.path_product *= edge.weight * edge.nto.path_product
-                    if node.path_product >= 1e10:
-                        print(edge.weight)
-                        print(edge.nto.path_product)
-                        assert(False)
-                except:
-                    print(node.name)
-                    print(edge.nto.name)
-                    print(edge.weight)
-                    print(edge.nto.path_product)
-                    assert(False)
+                node.path_product *= edge.weight * edge.nto.path_product
 
         # Now calculate the gradiant on each edge
         for edge in self.edges:
-            try:
-                edge.gradiant += edge.nto.path_product * edge.nfrom.value
-            except:
-                # for edge in self.edges:
-                #     print(edge.nfrom.name)
-                #     print(edge.nto.name)
-                #     print(edge.value)
-                print(edge.nfrom.name)
-                print(edge.nto.path_product)
-                print(edge.nfrom.value)
-                assert(False)
+            edge.gradiant += edge.nto.path_product * edge.nfrom.value
 
     def update_gradient(self, gamma: float) -> None:
         for edge in self.edges:
